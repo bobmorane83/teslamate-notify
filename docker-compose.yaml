@@ -1,5 +1,5 @@
   notify:
-    image: notify:latest
+    image: my_user_dockerhub/teslamate_notify:latest
     restart: always
     environment:
       - PYTHONUNBUFFERED=1
