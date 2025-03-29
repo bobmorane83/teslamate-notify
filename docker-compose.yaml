@@ -1,0 +1,7 @@
+  notify:
+    image: notify:latest
+    restart: always
+    environment:
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - mosquitto
