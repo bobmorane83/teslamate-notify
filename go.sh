@@ -1,1 +1,1 @@
-docker build -t notify .
+docker build -t teslamate_notify .
