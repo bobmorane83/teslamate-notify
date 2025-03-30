@@ -2,20 +2,20 @@ import time
 import psycopg2
 import paho.mqtt.client as mqtt
 import requests
+import os
 
-# Configuration
-MQTT_BROKER = "mosquitto"  # Adresse du broker MQTT
-MQTT_PORT = 1883             # Port MQTT
-CAR_ID = 1                   # ID de la voiture Teslamate
-NTFY_TOPIC = "votre_topic"  # Topic ntfy
+# Configuration via variables d'environnement
+MQTT_BROKER = os.getenv("MQTT_BROKER", "mosquitto")
+MQTT_PORT = os.getenv("MQTT_PORT", 1883)
+CAR_ID = os.getenv("CAR_ID", 1)
+NTFY_TOPIC = os.getenv("NTFY_TOPIC", "votre_topic")
 NTFY_URL = f"https://ntfy.sh/{NTFY_TOPIC}"
 
-# Configuration de la base de données Teslamate
-DB_HOST = "database"
-DB_PORT = "5432"
-DB_NAME = "teslamate"
-DB_USER = "teslamate"
-DB_PASSWORD = "password"
+DB_HOST = os.getenv("DB_HOST", "database")
+DB_PORT = os.getenv("DB_PORT", 5432)
+DB_NAME = os.getenv("DB_NAME", "teslamate")
+DB_USER = os.getenv("DB_USER", "teslamate")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "password")
 
 def query_last_charge():
     """Interroge la base PostgreSQL pour récupérer les infos de la dernière charge."""
