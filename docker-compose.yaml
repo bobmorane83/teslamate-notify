@@ -11,5 +11,3 @@
       - DB_NAME=teslamate
       - DB_USER=teslamate
       - DB_PASSWORD=password
-    depends_on:
-      - mosquitto

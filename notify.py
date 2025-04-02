@@ -1,12 +1,11 @@
 import time
 import psycopg2
-import paho.mqtt.client as mqtt
 import requests
 import os
+from datetime import datetime
+import pytz
 
 # Configuration via variables d'environnement
-MQTT_BROKER = os.getenv("MQTT_BROKER", "mosquitto")
-MQTT_PORT = os.getenv("MQTT_PORT", 1883)
 CAR_ID = os.getenv("CAR_ID", 1)
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "votre_topic")
 NTFY_URL = f"https://ntfy.sh/{NTFY_TOPIC}"
@@ -18,7 +17,7 @@ DB_USER = os.getenv("DB_USER", "teslamate")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "password")
 
 def query_last_charge():
-    """Interroge la base PostgreSQL pour récupérer les infos de la dernière charge."""
+    """Interroge la base PostgreSQL pour récupérer l'ID et les infos de la dernière charge."""
     try:
         conn = psycopg2.connect(
             host=DB_HOST,
@@ -30,8 +29,7 @@ def query_last_charge():
         cur = conn.cursor()
 
         query = f"""
-        SELECT
-            charge_energy_added, start_battery_level, end_battery_level, duration_min, cost, start_date, end_date
+        SELECT id, charge_energy_added, start_battery_level, end_battery_level, duration_min, cost, start_date, end_date
         FROM charging_processes
         WHERE car_id = {CAR_ID}
         ORDER BY end_date DESC
@@ -43,18 +41,22 @@ def query_last_charge():
         conn.close()
 
         if row:
+            paris_tz = pytz.timezone("Europe/Paris")
+            start = row[6].astimezone(paris_tz) if row[6] else None
+            end = row[7].astimezone(paris_tz) if row[7] else None
+
             return {
-                "energy_added": row[0],
-                "start_battery": row[1],
-                "end_battery": row[2],
-                "duration": row[3],
-                "cost": row[4],
-                "start" : row[5],
-                "end" : row[6]
+                "id": row[0],
+                "energy_added": row[1],
+                "start_battery": row[2],
+                "end_battery": row[3],
+                "duration": row[4],
+                "cost": row[5],
+                "start": start.strftime("%Y-%m-%d %H:%M") if start else "N/A",
+                "end": end.strftime("%Y-%m-%d %H:%M") if end else "N/A"
             }
         else:
             return None
-
     except Exception as e:
         print(f"Erreur PostgreSQL: {e}")
         return None
@@ -68,45 +70,30 @@ def send_ntfy_notification(charge_data):
     h, m = divmod(charge_data['duration'], 60)
 
     message = (
-        f"Charge terminée\n"
         f"Énergie ajoutée: {charge_data['energy_added']} kWh\n"
         f"De {charge_data['start']} à {charge_data['end']}\n"
         f"Durée: {h}h{m}\n"
-        f"{charge_data['start_battery']}% -> {charge_data['end_battery']}%\n"
+        f"Batterie : {charge_data['start_battery']}% -> {charge_data['end_battery']}%\n"
         f"Coût: {charge_data['cost']} €"
     )
 
     try:
-        requests.post(NTFY_URL, data=message.encode('utf-8'), headers={"Title": "Tesla Charge Complete"})
+        requests.post(NTFY_URL, data=message.encode('utf-8'), headers={"Title": "Charge terminee"})
         print("Notification envoyée via ntfy")
     except Exception as e:
         print(f"Erreur d'envoi de notification: {e}")
 
-def on_message(client, userdata, msg):
-    """Callback lors de la réception d'un message MQTT."""
-    topic = msg.topic
-    payload = msg.payload.decode("utf-8")
-
-    if topic == f"teslamate/cars/{CAR_ID}/charging_state" and payload == "Complete":
-        print("Charge terminée, attente de 60 secondes avant interrogation de la DB...")
-        time.sleep(60)
-
-        charge_data = query_last_charge()
-        send_ntfy_notification(charge_data)
-
 def main():
-    print("Start Notify ...")
-    """Configure et démarre le client MQTT."""
-    client = mqtt.Client()
-    client.on_message = on_message
-    client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    print("Démarrage du script de surveillance des charges...")
+    last_charge_id = None
 
-    # Écoute uniquement le changement d'état de charge
-    topic = f"teslamate/cars/{CAR_ID}/charging_state"
-    client.subscribe(topic)
+    while True:
+        charge_data = query_last_charge()
+        if charge_data and charge_data['id'] != last_charge_id:
+            send_ntfy_notification(charge_data)
+            last_charge_id = charge_data['id']
 
-    print(f"Écoute du topic MQTT: {topic}")
-    client.loop_forever()
+        time.sleep(60)  # Attente d'une minute avant la prochaine vérification
 
 if __name__ == "__main__":
     main()
