@@ -96,6 +96,7 @@ def query_last_drive():
           LIMIT 1
         )
         SELECT
+          drive_id,
           start_date_ts,
           end_date_ts,
           start_battery_level,
@@ -114,18 +115,18 @@ def query_last_drive():
 
         if row:
             paris_tz = pytz.timezone("Europe/Paris")
-            start = row[6].astimezone(paris_tz) if row[6] else None
-            end = row[7].astimezone(paris_tz) if row[7] else None
+            start = row[7].astimezone(paris_tz) if row[7] else None
+            end = row[8].astimezone(paris_tz) if row[8] else None
 
             return {
                 "id": row[0],
-                "distance": row[5],
-                "duration": row[4],
-                "start_battery": row[2],
-                "end_battery": row[3],
+                "distance": row[6],
+                "duration": row[5],
+                "start_battery": row[3],
+                "end_battery": row[4],
                 "start": start.strftime("%Y-%m-%d %H:%M:%S %Z") if start else "N/A",
                 "end": end.strftime("%Y-%m-%d %H:%M:%S %Z") if end else "N/A",
-                "avg_speed": row[8]
+                "avg_speed": row[9]
             }
         else:
             return None
@@ -148,7 +149,8 @@ def main():
 
     while True:
         charge_data = query_last_charge()
-        if charge_data and charge_data['id'] != last_charge_id:
+#        print(charge_data)
+        if charge_data and charge_data['id'] != last_charge_id and charge_data['cost'] != None:
             message = (
                 f"Énergie ajoutée: {charge_data['energy_added']} kWh\n"
                 f"De {charge_data['start']} à {charge_data['end']}\n"
@@ -159,16 +161,17 @@ def main():
             send_ntfy_notification(message, "Charge finie")
             last_charge_id = charge_data['id']
 
-        drive_data = query_last_drive()
-        if drive_data and drive_data['id'] != last_drive_id:
-            message = (
-                f"Distance: {drive_data['distance']} km\n"
-                f"Durée: {drive_data['duration']} min\n"
-                f"Batterie: {drive_data['start_battery']}% -> {drive_data['end_battery']}%\n"
-                f"Vitesse moyenne: {drive_data['avg_speed']:.2f} km/h"
-            )
-            send_ntfy_notification(message, "Fin de trajet")
-            last_drive_id = drive_data['id']
+        # drive_data = query_last_drive()
+        # print(drive_data)
+        # if drive_data and drive_data['id'] != last_drive_id and drive_data['distance'] != None:
+        #     message = (
+        #         f"Distance: {round(drive_data['distance'],1)} km\n"
+        #         f"Durée: {drive_data['duration']} min\n"
+        #         f"Batterie: {drive_data['start_battery']}% -> {drive_data['end_battery']}%\n"
+        #         f"Vitesse moyenne: {drive_data['avg_speed']:.2f} km/h"
+        #     )
+        #     send_ntfy_notification(message, "Fin de trajet")
+        #     last_drive_id = drive_data['id']
 
         time.sleep(60)  # Attente d'une minute avant la prochaine vérification
 
