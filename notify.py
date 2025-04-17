@@ -32,6 +32,7 @@ def query_last_charge():
         SELECT id, charge_energy_added, start_battery_level, end_battery_level, duration_min, cost, start_date, end_date
         FROM charging_processes
         WHERE car_id = {CAR_ID}
+        AND end_date IS NOT NULL
         ORDER BY end_date DESC
         LIMIT 1;
         """
@@ -74,39 +75,34 @@ def query_last_drive():
         cur = conn.cursor()
 
         query = f"""
-        WITH data AS (
           SELECT
-            round(extract(epoch FROM start_date)) * 1000 AS start_date_ts,
-            round(extract(epoch FROM end_date)) * 1000 AS end_date_ts,
-            car.id as car_id,
             drives.id as drive_id,
+            start_date,
+            end_date,
             duration_min,
             distance,
             start_position.battery_level as start_battery_level,
             end_position.battery_level as end_battery_level,
-            start_date,
-            end_date,
-            distance / coalesce(NULLIF(duration_min, 0) * 60, extract(epoch from end_date - start_date)) * 3600 AS avg_speed
+            COALESCE(start_geofence.name, CONCAT_WS(', ', COALESCE(start_address.name, nullif(CONCAT_WS(' ', start_address.road, start_address.house_number), '')), start_address.city)) AS start_address,
+            COALESCE(end_geofence.name, CONCAT_WS(', ', COALESCE(end_address.name, nullif(CONCAT_WS(' ', end_address.road, end_address.house_number), '')), end_address.city)) AS end_address,
+            case when (start_position.battery_level != start_position.usable_battery_level OR end_position.battery_level != end_position.usable_battery_level) = true then true else false end  as reduced_range,
+                duration_min > 1 AND distance > 1 AND (
+                start_position.usable_battery_level IS NULL OR end_position.usable_battery_level IS NULL	OR
+                (end_position.battery_level - end_position.usable_battery_level) = 0
+            ) as is_sufficiently_precise,
+          NULLIF(GREATEST(start_rated_range_km - end_rated_range_km, 0), 0) * car.efficiency / convert_km(distance::numeric, 'km') * 1000 as "consumption_Wh_km"
           FROM drives
+          LEFT JOIN addresses start_address ON start_address_id = start_address.id
+          LEFT JOIN addresses end_address ON end_address_id = end_address.id
           LEFT JOIN positions start_position ON start_position_id = start_position.id
           LEFT JOIN positions end_position ON end_position_id = end_position.id
+          LEFT JOIN geofences start_geofence ON start_geofence_id = start_geofence.id
+          LEFT JOIN geofences end_geofence ON end_geofence_id = end_geofence.id
           LEFT JOIN cars car ON car.id = drives.car_id
-          WHERE drives.car_id = {CAR_ID}
+          WHERE drives.car_id = 1
+          AND end_date IS NOT NULL
           ORDER BY end_date DESC
-          LIMIT 1
-        )
-        SELECT
-          drive_id,
-          start_date_ts,
-          end_date_ts,
-          start_battery_level,
-          end_battery_level,
-          duration_min,
-          distance,
-          start_date,
-          end_date,
-          avg_speed
-        FROM data;
+          LIMIT 1;
         """
 
         cur.execute(query)
@@ -115,18 +111,20 @@ def query_last_drive():
 
         if row:
             paris_tz = pytz.timezone("Europe/Paris")
-            start = row[7].astimezone(paris_tz) if row[7] else None
-            end = row[8].astimezone(paris_tz) if row[8] else None
+            start = row[1].astimezone(paris_tz) if row[1] else None
+            end = row[2].astimezone(paris_tz) if row[2] else None
 
             return {
                 "id": row[0],
-                "distance": row[6],
-                "duration": row[5],
-                "start_battery": row[3],
-                "end_battery": row[4],
                 "start": start.strftime("%Y-%m-%d %H:%M:%S %Z") if start else "N/A",
                 "end": end.strftime("%Y-%m-%d %H:%M:%S %Z") if end else "N/A",
-                "avg_speed": row[9]
+                "duration": row[3],
+                "distance": row[4],
+                "start_battery": row[5],
+                "end_battery": row[6],
+                "start_addr": row[7],
+                "end_addr": row[8],
+                "conso": row[11]
             }
         else:
             return None
@@ -151,27 +149,32 @@ def main():
         charge_data = query_last_charge()
 #        print(charge_data)
         if charge_data and charge_data['id'] != last_charge_id and charge_data['cost'] != None:
+            h, m = divmod(charge_data['duration'], 60)
             message = (
                 f"Énergie ajoutée: {charge_data['energy_added']} kWh\n"
                 f"De {charge_data['start']} à {charge_data['end']}\n"
-                f"Durée: {charge_data['duration']} min\n"
+                f"Durée: {h}h{m}\n"
                 f"Batterie: {charge_data['start_battery']}% -> {charge_data['end_battery']}%\n"
                 f"Coût: {charge_data['cost']} €"
             )
             send_ntfy_notification(message, "Charge finie")
             last_charge_id = charge_data['id']
 
-        # drive_data = query_last_drive()
-        # print(drive_data)
-        # if drive_data and drive_data['id'] != last_drive_id and drive_data['distance'] != None:
-        #     message = (
-        #         f"Distance: {round(drive_data['distance'],1)} km\n"
-        #         f"Durée: {drive_data['duration']} min\n"
-        #         f"Batterie: {drive_data['start_battery']}% -> {drive_data['end_battery']}%\n"
-        #         f"Vitesse moyenne: {drive_data['avg_speed']:.2f} km/h"
-        #     )
-        #     send_ntfy_notification(message, "Fin de trajet")
-        #     last_drive_id = drive_data['id']
+        drive_data = query_last_drive()
+#        print(drive_data)
+        if drive_data and drive_data['id'] != last_drive_id and drive_data['distance'] != None:
+            h, m = divmod(drive_data['duration'], 60)
+            message = (
+                f"De: {drive_data['start_addr']}\n"
+                f"a: {drive_data['end_addr']}\n"
+                f"Distance: {round(drive_data['distance'],1)} km\n"
+                f"Durée: {h}h{m}\n"
+                f"Conso: {round(drive_data['conso'],1)} Wh/km\n"
+                f"Batterie: {drive_data['start_battery']}% -> {drive_data['end_battery']}%\n"
+#                f"Vitesse moyenne: {drive_data['avg_speed']:.2f} km/h"
+            )
+            send_ntfy_notification(message, "Fin de trajet")
+            last_drive_id = drive_data['id']
 
         time.sleep(60)  # Attente d'une minute avant la prochaine vérification
 
